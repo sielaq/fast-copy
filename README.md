@@ -14,10 +14,10 @@ That means you need to settup SSH keys, and configure sudoers on all hosts.
 
 #### 1) Required tools
 
-nc     - Till now it supports traditional nc (netcat)
-mkfifo - Needed for creating a splitted stream
-pigz   - A parallel implementation of gzip for modern multi-processor, multi-core machines.
-screen - For detaching background jobs
+* nc     - Till now it supports traditional nc (netcat)
+* mkfifo - Needed for creating a splitted stream
+* pigz   - A parallel implementation of gzip for modern multi-processor, multi-core machines.
+* screen - For detaching background jobs
 
 #### 2) Destination directory must be empty or not exist
 
