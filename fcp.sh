@@ -1,4 +1,5 @@
-# Fast Copy
+#!/bin/bash
+# Fast Copy 
 # using pigz and parallel copy
 
 PORT=2222
@@ -51,8 +52,8 @@ do
         ;;
     -s | --src|--source)
         shift
-	HOST_SRC=$(echo $1|awk -F\: '{print $1}')
-	DIR_SRC=$(echo $1|awk -F\: '{print $2}')
+        HOST_SRC=${1%:*}
+        DIR_SRC=${1#*:}
         shift
         ;;
     -h | --help)
@@ -91,66 +92,68 @@ app_check() {
 }
 
 check() {
-  EXIT_CODE=0
-  echo "$1:"
-  APPS=$($SSH $1 "which pigz;which nc;which tar;which screen;ls -A $2|wc -l")
-  COUNT_DIR=$(echo "${APPS}" | tail -n1)
-  app_check "${APPS}" pigz  || EXIT_CODE=1
-  app_check "${APPS}" nc    || EXIT_CODE=1
-  app_check "${APPS}" tar   || EXIT_CODE=1
-  app_check "${APPS}" screen|| EXIT_CODE=1
-  [ ! -z $2 ] && {
-    [ "$COUNT_DIR" -eq 0 ] && echo -e "$OK destination dir $2 is empty" || {
-      echo -e "${NOK} destination dir $2 not empty"; EXIT_CODE=1;
+  local host=$1
+  local dir=$2
+  local exit=0
+  echo "${host}:"
+  local apps=$($SSH ${host} "which pigz;which nc;which tar;which screen;ls -A ${dir} 2>/dev/null|wc -l")
+  local count_dir=$(echo "${apps}" | tail -n1)
+  app_check "${apps}" pigz  || exit=1
+  app_check "${apps}" nc    || exit=1
+  app_check "${apps}" tar   || exit=1
+  app_check "${apps}" screen|| exit=1
+  [ ! -z ${dir} ] && {
+    [ "$count_dir" -eq 0 ] && echo -e "$OK destination dir ${dir} is empty" || {
+      echo -e "${NOK} destination dir ${dir} not empty"; exit=1;
     }
   }
-  return ${EXIT_CODE}
+  return ${exit}
 }
 
 check_sum() {
-  $SSH $1 "sudo sh -c \"cd $2;find . -type f | xargs -n1 -P4 $CHKSUM|sort -dk2|$CHKSUM\""
+  $SSH $1 "sudo sh -c \"cd $2;find . -type f -print0| xargs -0 -n1 -P4 $CHKSUM|sort -dk2|$CHKSUM\""
 }
 
 [ ${COPY} -eq 0 ] && {
+
   #1. check each host if contains needed apps
   EXIT=0
   echo "Checking all hosts for required tools..."
   check $HOST_SRC || EXIT=1
   for i in ${DEST[@]}
   do
-    HOST=$(echo $i|awk -F\: '{print $1}')
-    DIR=$(echo $i|awk -F\: '{print $2}')
+    HOST=${i%:*}
+    DIR=${i#*:}
     check $HOST $DIR || EXIT=1
   done
   [ ${EXIT} -eq 1 ] && exit 1
   
   # 2. Install on last host screen with netcat
   echo "Setting up last host..."
-  HOST_LAST=$(echo ${DEST[$C-1]}|awk -F\: '{print $1}')
-  DIR_LAST=$(echo ${DEST[$C-1]}|awk -F\: '{print $2}')
+  HOST_LAST=${DEST[$C-1]%:*}
+  DIR_LAST=${DEST[$C-1]#*:}
   $SSH -f $HOST_LAST "sudo screen -S fcp.$$.C -dm sh -c \"[ -d ${DIR_LAST} ] || mkdir -p ${DIR_LAST};${NC} -l -p ${PORT} -q 0 | pigz -d| tar xvf - -C ${DIR_LAST}\""
   
   # 3. For all hosts in between first and last, install pipe splitter
   echo "Setting up splitter..."
   ELEM_LAST=""
-  if [ ${#DEST[@]} -gt 1 ]
-  then
+  [ ${#DEST[@]} -gt 1 ] && {
     for i in "${DEST[@]}"
     do
       [ ! -z $ELEM_LAST ] && {
-        HOST_NEXT=$(echo $i|awk -F\: '{print $1}')
-        HOST=$(echo ${ELEM_LAST}|awk -F\: '{print $1}')
-        DIR=$(echo ${ELEM_LAST}|awk -F\: '{print $2}')
+        HOST_NEXT=${i%:*}
+        HOST=${ELEM_LAST%:*}
+        DIR=${ELEM_LAST#*:}
         echo "$HOST - setting up fifo and splitter"
         $SSH -f $HOST "sudo screen -S fcp.$$.A -dm sh -c \"mkfifo /tmp/myfifo; ${NC} -q 0 ${HOST_NEXT} ${PORT} </tmp/myfifo ; sleep 1d \""
         $SSH -f $HOST "sudo screen -S fcp.$$.B -dm sh -c \"[ -d ${DIR} ] || mkdir -p ${DIR};${NC} -l -p ${PORT} -q 0|tee /tmp/myfifo|pigz -d|tar xvf - -C ${DIR}\""
       }
       ELEM_LAST=$i
     done
-  fi
+  }
   
   # 4. Start copy
-  HOST_FIRST=$(echo ${DEST[0]}|awk -F\: '{print $1}')
+  HOST_FIRST=${DEST[0]%:*}
   echo "Start copying..."
   $SSH $HOST_SRC "sudo sh -c \"tar cv -C ${DIR_SRC} .| pigz | ${NC} -q 0 ${HOST_FIRST} ${PORT}\" " || {
     echo "Copy error"
@@ -161,7 +164,7 @@ check_sum() {
   echo "Clean up..."
   for i in "${DEST[@]}"
   do
-    HOST=$(echo $i|awk -F\: '{print $1}')
+    HOST=${i%:*}
     $SSH -f $HOST "sudo rm /tmp/myfifo >/dev/null 2>&1;sudo screen -X -S fcp.$$ quit >/dev/null 2>&1"
   done
 }
@@ -172,8 +175,8 @@ check_sum() {
   check_sum ${HOST_SRC} ${DIR_SRC} > /tmp/$$.$HOST_SRC &
   for i in "${DEST[@]}"
   do
-    HOST=$(echo $i|awk -F\: '{print $1}')
-    DIR=$(echo $i|awk -F\: '{print $2}')
+    HOST=${i%:*}
+    DIR=${i#*:}
     check_sum ${HOST} ${DIR} > /tmp/$$.$HOST &
   done
   wait
@@ -182,8 +185,8 @@ check_sum() {
   echo -e "${HOST_SRC}: \t${SRC_SUM}"
   for i in "${DEST[@]}"
   do
-    HOST=$(echo $i|awk -F\: '{print $1}')
-    HOST_SUM=$(cat /tmp/$$.$HOST)
+    HOST=${i%:*}
+    HOST_SUM=$(cat /tmp/$$.${HOST})
     echo -e "${HOST}: \t${HOST_SUM}"
     [ "$SRC_SUM" = "$HOST_SUM" ] && echo -e "$OK all $CHKSUM from $DIR are identical like on ${HOST_SRC}:${DIR_SRC}" || {
       echo -e "$NOK some $CHKSUM from $DIR are different than ${HOST_SRC}:${DIR_SRC}"
